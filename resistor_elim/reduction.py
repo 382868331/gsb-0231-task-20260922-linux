@@ -240,6 +240,11 @@ def schur_eliminate(
 
     本函数不修改 ``network``；输入非法时抛出 :class:`NetworkError` 子类，
     不会产生部分结果。
+
+    注意：这是**静态电导（电阻）模型**——``laplacian`` 只统计电导支路，
+    电容/电感不参与。含 C/L 的正弦稳态分析请用
+    :func:`resistor_elim.ac_schur_eliminate`。纯电阻网络（旧契约）行为
+    完全不变。
     """
     if not isinstance(network, Network):
         raise TypeError("network 必须是 resistor_elim.Network 实例")

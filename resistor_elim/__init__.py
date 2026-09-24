@@ -1,7 +1,8 @@
-"""定向结点电阻网络等效消元库（精确有理，Python 标准库）。
+"""定向结点网络等效消元库（精确有理，Python 标准库）。
 
-公开接口见 :class:`resistor_elim.Network` 与
-:func:`resistor_elim.schur_eliminate`。
+电阻（直流/静态）接口见 :class:`resistor_elim.Network` 与
+:func:`resistor_elim.schur_eliminate`；R/L/C 正弦稳态相量接口见
+:func:`resistor_elim.ac_schur_eliminate`。
 """
 
 from .errors import (
@@ -10,11 +11,15 @@ from .errors import (
     ConductanceError,
     ResistanceError,
     ZeroResistanceError,
+    CapacitanceError,
+    InductanceError,
+    FrequencyError,
     PortError,
     PotentialError,
     LimitError,
     SingularSystemError,
 )
+from .linalg import CFrac
 from .network import Network
 from .reduction import (
     schur_eliminate,
@@ -22,6 +27,13 @@ from .reduction import (
     ComponentReduction,
     SchurRecord,
     Solution,
+)
+from .ac import (
+    ac_schur_eliminate,
+    ACReduction,
+    ACComponentReduction,
+    ACSchurRecord,
+    ACSolution,
 )
 
 __all__ = [
@@ -31,15 +43,24 @@ __all__ = [
     "ComponentReduction",
     "SchurRecord",
     "Solution",
+    "ac_schur_eliminate",
+    "ACReduction",
+    "ACComponentReduction",
+    "ACSchurRecord",
+    "ACSolution",
+    "CFrac",
     "NetworkError",
     "NodeError",
     "ConductanceError",
     "ResistanceError",
     "ZeroResistanceError",
+    "CapacitanceError",
+    "InductanceError",
+    "FrequencyError",
     "PortError",
     "PotentialError",
     "LimitError",
     "SingularSystemError",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

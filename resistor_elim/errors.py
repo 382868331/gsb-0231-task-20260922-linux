@@ -34,6 +34,21 @@ class ZeroResistanceError(ResistanceError):
     """明确拒绝零电阻：它不在本库实现的无源正电导子集内。"""
 
 
+class CapacitanceError(NetworkError):
+    """电容值非法（非正、NaN/Infinity、类型不符）。"""
+
+
+class InductanceError(NetworkError):
+    """电感值非法（非正、NaN/Infinity、类型不符）。"""
+
+
+class FrequencyError(NetworkError):
+    """角频率非法（零、NaN/Infinity、类型不符）。
+
+    本迭代只在**非零有限**角频率点做相量分析；零频（直流极限）不在范围内。
+    """
+
+
 class PortError(NetworkError):
     """端口集合非法（空集、未知节点、重复等）。"""
 

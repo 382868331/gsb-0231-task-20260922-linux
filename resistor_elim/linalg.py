@@ -131,3 +131,221 @@ class Mat:
         cols: Sequence[int],
     ) -> list[list[Fraction]]:
         return [[a[i][j] for j in cols] for i in rows]
+
+
+# ---------------------------------------------------------------------- #
+# 精确复分数（实部、虚部分别为 Fraction）：相量 MNA 的标量类型
+# ---------------------------------------------------------------------- #
+class CFrac:
+    """精确复数 ``re + i*im``，实部虚部都是 :class:`Fraction`。
+
+    算术全程精确有理；判零用 ``re == 0 and im == 0``，因此相量系统的
+    奇异（例如纯 LC 谐振）同样由**精确零主元**判定，不使用数值容差。
+    仅在打印时经 ``complex(self)`` 转浮点。
+    """
+
+    __slots__ = ("re", "im")
+
+    def __init__(self, re: Fraction | int = 0, im: Fraction | int = 0):
+        self.re = Fraction(re)
+        self.im = Fraction(im)
+
+    # 构造便捷形式
+    @staticmethod
+    def i_(value: Fraction | int) -> "CFrac":
+        """纯虚数 ``i*value``。"""
+        return CFrac(Fraction(0), Fraction(value))
+
+    @staticmethod
+    def _coerce(other: "CFrac | Fraction | int") -> "CFrac":
+        if isinstance(other, CFrac):
+            return other
+        if isinstance(other, (Fraction, int)):
+            return CFrac(other)
+        return NotImplemented
+
+    def __add__(self, other: "CFrac | Fraction | int") -> "CFrac":
+        o = CFrac._coerce(other)
+        if o is NotImplemented:
+            return NotImplemented
+        return CFrac(self.re + o.re, self.im + o.im)
+
+    __radd__ = __add__
+
+    def __sub__(self, other: "CFrac | Fraction | int") -> "CFrac":
+        o = CFrac._coerce(other)
+        if o is NotImplemented:
+            return NotImplemented
+        return CFrac(self.re - o.re, self.im - o.im)
+
+    def __rsub__(self, other: "CFrac | Fraction | int") -> "CFrac":
+        o = CFrac._coerce(other)
+        if o is NotImplemented:
+            return NotImplemented
+        return CFrac(o.re - self.re, o.im - self.im)
+
+    def __neg__(self) -> "CFrac":
+        return CFrac(-self.re, -self.im)
+
+    def __mul__(self, other: "CFrac | Fraction | int") -> "CFrac":
+        o = CFrac._coerce(other)
+        if o is NotImplemented:
+            return NotImplemented
+        a, b, c, d = self.re, self.im, o.re, o.im
+        return CFrac(a * c - b * d, a * d + b * c)
+
+    __rmul__ = __mul__
+
+    def reciprocal(self) -> "CFrac":
+        denom = self.re * self.re + self.im * self.im
+        return CFrac(self.re / denom, -self.im / denom)
+
+    def conjugate(self) -> "CFrac":
+        return CFrac(self.re, -self.im)
+
+    def __truediv__(self, other: "CFrac | Fraction | int") -> "CFrac":
+        o = CFrac._coerce(other)
+        if o is NotImplemented:
+            return NotImplemented
+        return self * o.reciprocal()
+
+    def __rtruediv__(self, other: "CFrac | Fraction | int") -> "CFrac":
+        o = CFrac._coerce(other)
+        if o is NotImplemented:
+            return NotImplemented
+        return o * self.reciprocal()
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CFrac):
+            return NotImplemented
+        return self.re == other.re and self.im == other.im
+
+    def __hash__(self) -> int:
+        return hash((self.re, self.im))
+
+    def __bool__(self) -> bool:
+        return self.re != 0 or self.im != 0
+
+    def __complex__(self) -> complex:
+        return complex(float(self.re), float(self.im))
+
+    def __repr__(self) -> str:
+        if self.im == 0:
+            return f"CFrac({self.re!r})"
+        if self.re == 0:
+            return f"CFrac(0, {self.im!r})"
+        return f"CFrac({self.re!r}, {self.im!r})"
+
+    def __str__(self) -> str:
+        if self.im == 0:
+            return str(self.re)
+        if self.re == 0:
+            return f"{self.im}j"
+        sign = "+" if self.im > 0 else "-"
+        return f"{self.re}{sign}{abs(self.im)}j"
+
+
+class CMat:
+    """:class:`CFrac` 稠密矩阵上的静态工具方法（与 :class:`Mat` 对应）。"""
+
+    @staticmethod
+    def zeros(rows: int, cols: int) -> list[list[CFrac]]:
+        return [[CFrac() for _ in range(cols)] for _ in range(rows)]
+
+    @staticmethod
+    def identity(n: int) -> list[list[CFrac]]:
+        m = CMat.zeros(n, n)
+        for i in range(n):
+            m[i][i] = CFrac(1)
+        return m
+
+    @staticmethod
+    def copy(m: Sequence[Sequence[CFrac]]) -> list[list[CFrac]]:
+        return [list(row) for row in m]
+
+    @staticmethod
+    def is_symmetric(m: Sequence[Sequence[CFrac]]) -> bool:
+        n = len(m)
+        return all(len(m[i]) == n for i in range(n)) and all(
+            m[i][j] == m[j][i] for i in range(n) for j in range(i + 1, n)
+        )
+
+    @staticmethod
+    def rref(
+        a: list[list[CFrac]],
+        b: list[list[CFrac]] | None = None,
+    ) -> list[list[CFrac]]:
+        """对增广矩阵 ``[a | b]`` 做精确复高斯-若尔当消元。
+
+        奇异时抛 :class:`SingularSystemError`（主元必须精确非零）。
+        """
+        n = len(a)
+        rhs = CMat.identity(n) if b is None else CMat.copy(b)
+        if n == 0:
+            return rhs
+        if any(len(row) != n for row in a):
+            raise ValueError("rref 只支持方阵")
+        k = len(rhs[0]) if rhs else 0
+        if any(len(row) != k for row in rhs) or len(rhs) != n:
+            raise ValueError("右侧形状不匹配")
+
+        for col in range(n):
+            pivot = next((r for r in range(col, n) if a[r][col]), None)
+            if pivot is None:
+                raise SingularSystemError(
+                    f"相量系统在第 {col} 个主元处奇异"
+                    f"（例如纯 L/C 组件在该频率谐振，导纳发散）"
+                )
+            if pivot != col:
+                a[col], a[pivot] = a[pivot], a[col]
+                rhs[col], rhs[pivot] = rhs[pivot], rhs[col]
+            pivot_val = a[col][col]
+            a[col] = [x / pivot_val for x in a[col]]
+            rhs[col] = [x / pivot_val for x in rhs[col]]
+            for r in range(n):
+                if r == col:
+                    continue
+                factor = a[r][col]
+                if factor:
+                    a[r] = [x - factor * y for x, y in zip(a[r], a[col])]
+                    rhs[r] = [x - factor * y for x, y in zip(rhs[r], rhs[col])]
+        return rhs
+
+    @staticmethod
+    def inverse(a: Sequence[Sequence[CFrac]]) -> list[list[CFrac]]:
+        return CMat.rref(CMat.copy(a))
+
+    @staticmethod
+    def matvec(
+        a: Sequence[Sequence[CFrac]],
+        x: Sequence[CFrac],
+    ) -> list[CFrac]:
+        return [sum((a_ij * x_j for a_ij, x_j in zip(row, x)), CFrac()) for row in a]
+
+    @staticmethod
+    def matmul(
+        a: Sequence[Sequence[CFrac]],
+        b: Sequence[Sequence[CFrac]],
+    ) -> list[list[CFrac]]:
+        if not a or not b:
+            return []
+        inner = len(b)
+        if any(len(row) != inner for row in a):
+            raise ValueError("矩阵维度不匹配")
+        cols = len(b[0])
+        b_cols = [[b[r][c] for r in range(inner)] for c in range(cols)]
+        return [
+            [
+                sum((a[i][r] * b_cols[c][r] for r in range(inner)), CFrac())
+                for c in range(cols)
+            ]
+            for i in range(len(a))
+        ]
+
+    @staticmethod
+    def submatrix(
+        a: Sequence[Sequence[CFrac]],
+        rows: Sequence[int],
+        cols: Sequence[int],
+    ) -> list[list[CFrac]]:
+        return [[a[i][j] for j in cols] for i in rows]
