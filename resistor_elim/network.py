@@ -16,7 +16,9 @@ from fractions import Fraction
 from typing import Any, Hashable, Iterable
 
 from .errors import (
+    CapacitanceError,
     ConductanceError,
+    InductanceError,
     LimitError,
     NodeError,
     ResistanceError,
@@ -107,10 +109,17 @@ class Network:
             )
         self._nodes: tuple[Hashable, ...] = tuple(labels)
         self._index: dict[Hashable, int] = {v: i for i, v in enumerate(labels)}
-        # 邻接电导（平行边求和）
+        # 电阻邻接电导（平行边求和）
         self._adj: dict[Hashable, dict[Hashable, Fraction]] = {v: {} for v in labels}
-        # 每条添加记录：(u, v, conductance)，便于逐支路核对
+        # 每条电阻添加记录：(u, v, conductance)，便于逐支路核对
         self._branches: list[tuple[Hashable, Hashable, Fraction]] = []
+        # 电容邻接（平行电容容量相加）与添加记录 (u, v, C)
+        self._cap_adj: dict[Hashable, dict[Hashable, Fraction]] = {
+            v: {} for v in labels
+        }
+        self._cap_branches: list[tuple[Hashable, Hashable, Fraction]] = []
+        # 电感添加记录 (u, v, L)；每条电感单独保留（MNA 中各占一个电流变量）
+        self._ind_branches: list[tuple[Hashable, Hashable, Fraction]] = []
 
     # ------------------------------------------------------------------ #
     @property
@@ -120,6 +129,16 @@ class Network:
     @property
     def branches(self) -> tuple[tuple[Hashable, Hashable, Fraction], ...]:
         return tuple(self._branches)
+
+    @property
+    def capacitor_branches(self) -> tuple[tuple[Hashable, Hashable, Fraction], ...]:
+        """电容添加记录 ``(u, v, C)``（逐条保留；平行容量在矩阵中相加）。"""
+        return tuple(self._cap_branches)
+
+    @property
+    def inductor_branches(self) -> tuple[tuple[Hashable, Hashable, Fraction], ...]:
+        """电感支路记录 ``(u, v, L)``（每条电感单独保留，不合并）。"""
+        return tuple(self._ind_branches)
 
     def __len__(self) -> int:
         return len(self._nodes)
@@ -165,10 +184,55 @@ class Network:
         self.add_conductor(u, v, Fraction(1) / r)
 
     # ------------------------------------------------------------------ #
+    def add_capacitor(self, u: Hashable, v: Hashable, capacitance: Any) -> None:
+        """添加一条电容 ``C = capacitance`` 的支路（要求严格正）。
+
+        平行电容容量相加（基尔霍夫并联）。电容仅用于交流相量分析
+        （:func:`resistor_elim.ac_admittance`），不出现在直流
+        :meth:`laplacian` 中。
+        """
+        iu = self.index(u)
+        iv = self.index(v)
+        if iu == iv:
+            raise CapacitanceError("不允许自环支路（u == v）", edge=(u, v))
+        c = exact_scalar(capacitance, f"电容 ({u!r}, {v!r})", CapacitanceError)
+        if c <= 0:
+            raise CapacitanceError(
+                f"电容必须严格为正，收到 {c}（零电容等价于开路，"
+                f"请直接省略该支路）",
+                edge=(u, v),
+            )
+        self._cap_adj[u][v] = self._cap_adj[u].get(v, Fraction(0)) + c
+        self._cap_adj[v][u] = self._cap_adj[v].get(u, Fraction(0)) + c
+        self._cap_branches.append((u, v, c))
+
+    def add_inductor(self, u: Hashable, v: Hashable, inductance: Any) -> None:
+        """添加一条电感 ``L = inductance`` 的支路（要求严格正）。
+
+        每条电感在修正结点方程中占一个独立支路电流变量，因此逐条保留
+        （包括平行电感，它们在交流下是不同的支路）。电感仅用于交流相量
+        分析（:func:`resistor_elim.ac_admittance`）。
+        """
+        iu = self.index(u)
+        iv = self.index(v)
+        if iu == iv:
+            raise InductanceError("不允许自环支路（u == v）", edge=(u, v))
+        ell = exact_scalar(inductance, f"电感 ({u!r}, {v!r})", InductanceError)
+        if ell <= 0:
+            raise InductanceError(
+                f"电感必须严格为正，收到 {ell}（零电感等价于理想短路线，"
+                f"会使电势定义退化，请先合并等势节点）",
+                edge=(u, v),
+            )
+        self._ind_branches.append((u, v, ell))
+
+    # ------------------------------------------------------------------ #
     def laplacian(self) -> list[list[Fraction]]:
-        """返回结点拉普拉斯矩阵 ``K``（``Fraction``，按节点顺序索引）。
+        """返回直流电阻结点拉普拉斯矩阵 ``K``（``Fraction``，按节点顺序索引）。
 
         ``K[i,i]`` 为结点 ``i`` 上所有电导之和；``K[i,j] = -g_ij``。
+        电容与电感**不**包含在内（它们属于交流相量分析，见
+        :func:`resistor_elim.ac_admittance`）。
         """
         n = len(self._nodes)
         k = [[Fraction(0) for _ in range(n)] for _ in range(n)]
@@ -179,6 +243,32 @@ class Network:
                 k[iu][iv] -= g
                 k[iu][iu] += g
         return k
+
+    def nodal_admittance(self, omega: Fraction):
+        """角频率 ``omega``（非零有限，已由交流求解器校验为 ``Fraction``）
+        下电阻 + 电容部分的结点导纳矩阵（:class:`~resistor_elim.cx.QComplex`）。
+
+        电阻贡献电导 ``g``，电容支路贡献导纳 ``jωC``；两者都按
+        “对角 +g、非对角 −g”的方式戳入。电感不在这里（它在修正结点
+        方程中以支路电流变量出现，由交流求解器另行处理）。
+        """
+        from .cx import J, QComplex
+
+        n = len(self._nodes)
+        y = [[QComplex() for _ in range(n)] for _ in range(n)]
+
+        def stamp(adj, val: QComplex) -> None:
+            for u, neighbors in adj.items():
+                iu = self._index[u]
+                for v, amount in neighbors.items():
+                    iv = self._index[v]
+                    yv = val * amount
+                    y[iu][iv] -= yv
+                    y[iu][iu] += yv
+
+        stamp(self._adj, QComplex(1))       # 电阻：导纳 = g
+        stamp(self._cap_adj, J * omega)     # 电容：导纳 = jωC
+        return y
 
     def conductance_between(self, u: Hashable, v: Hashable) -> Fraction:
         self.index(u)
@@ -192,8 +282,14 @@ class Network:
     def components(self) -> list[tuple[Hashable, ...]]:
         """返回无向连通组件（按各自最小节点次序排序的标签元组列表）。
 
-        孤立节点自身构成一个组件并显式出现，不会被丢弃。
+        电阻、电容、电感支路都视为图的边；孤立节点自身构成一个组件并
+        显式出现，不会被丢弃。
         """
+        # 电感逐条存储，这里临时并出邻接关系
+        ind_adj: dict[Hashable, set[Hashable]] = {v: set() for v in self._nodes}
+        for u, v, _ in self._ind_branches:
+            ind_adj[u].add(v)
+            ind_adj[v].add(u)
         seen: set[Hashable] = set()
         result: list[tuple[Hashable, ...]] = []
         for start in self._nodes:
@@ -206,6 +302,14 @@ class Network:
                 x = stack.pop()
                 comp.append(x)
                 for y in self._adj[x]:
+                    if y not in seen:
+                        seen.add(y)
+                        stack.append(y)
+                for y in self._cap_adj[x]:
+                    if y not in seen:
+                        seen.add(y)
+                        stack.append(y)
+                for y in ind_adj[x]:
                     if y not in seen:
                         seen.add(y)
                         stack.append(y)

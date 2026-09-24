@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Hashable, Iterable, Mapping, Sequence
 
-from .errors import PortError, PotentialError
+from .errors import NetworkError, PortError, PotentialError
 from .linalg import Mat
 from .network import Network, potential_scalar
 
@@ -243,6 +243,12 @@ def schur_eliminate(
     """
     if not isinstance(network, Network):
         raise TypeError("network 必须是 resistor_elim.Network 实例")
+    if network.capacitor_branches or network.inductor_branches:
+        raise NetworkError(
+            "schur_eliminate 是纯电阻直流消元：网络中含有电容/电感时"
+            "直流（ω=0）下应分别视为开路/短路，零频极限不在其契约内；"
+            "请改用 ac_admittance(network, ports, omega) 在非零频率点求复导纳"
+        )
     port_list = _validate_ports(network, ports)
     port_set = set(port_list)
     n = len(network)
