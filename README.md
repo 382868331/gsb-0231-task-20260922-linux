@@ -8,7 +8,14 @@ Dirichlet-to-Neumann（DtN，电流/电势）矩阵；无端口组件显式标�
 
 - **Python 版本**：Python 3.14.7（3.10+ 亦可运行；开发与验收使用 3.14.7）
 - **依赖**：仅标准库（`fractions`、`dataclasses` 等）。安装 Python 后
-  无需安装任何第三方包，无网络/账号/数据库/云 API 需求。
+  无需安装任何第三方包，无网络/账号/数据库/云 API 需求。可用
+  下面命令准备虚拟环境；仓库 `requirements.txt` 不引入第三方包：
+
+  ```bash
+  python -m venv .venv
+  . .venv/bin/activate
+  python -m pip install -r requirements.txt
+  ```
 - **数值内核**：全程 `fractions.Fraction` 精确有理运算，不使用第三方
   同类实现，核心算法（拉普拉斯拼装、分块 Schur 补、有理高斯消元、
   内部量恢复）全部在本仓库从零实现。
@@ -33,6 +40,14 @@ sol.potentials["m"]      # 6 —— 精确恢复内部电势
 sol.port_currents        # {"p": 1, "q": -1} —— 注入电流
 sol.port_power           # 8 —— Σ V_p I_p
 sol.dissipated_power     # 8 —— Σ g(ΔV)²，精确相等
+
+# 同一组正电导也定义无向加权随机游走；s 是独立于电阻自环的停留权重
+net.set_stay_weight("m", 3)
+hit = expected_hitting_times(net, ["q"])
+hit.expectations          # {q: 0, m: ..., p: ...}；不可达起点为 math.inf
+hit.transition_probabilities
+hit.residuals             # 有限分量上的 Poisson 方程残差，精确为 0
+hit.unreachable_components
 ```
 
 ## 准确命令
@@ -40,6 +55,7 @@ sol.dissipated_power     # 8 —— Σ g(ΔV)²，精确相等
 ```bash
 python -m unittest discover -s tests -v   # 必要测试（unittest 自动统计用例数）
 python demo.py                             # 固定输入演示（约 0.05 秒）
+python demo_iteration.py                  # 本轮随机游走功能演示（<1 秒）
 ```
 
 `demo.py` 真实计算并打印：一个含内部节点、浮接组件与孤立节点的网络的
@@ -57,6 +73,8 @@ python demo.py                             # 固定输入演示（约 0.05 秒�
 | `Network.add_resistor(u, v, r)` | 加电阻 `r`（严格正）；`r=0` 抛 `ZeroResistanceError`。 |
 | `Network.laplacian()` | 结点拉普拉斯 `K`（`Fraction` 矩阵，按节点顺序）。 |
 | `Network.components()` | 无向连通组件；**孤立节点自成组件显式出现**。 |
+| `Network.set_stay_weight(node, weight)` | 设置随机游走的非负停留（自环）权重；不进入 `laplacian()`。 |
+| `Network.stay_weights` | 按节点顺序返回停留权重，默认全 0。 |
 | `schur_eliminate(network, ports)` | 消元，返回 `Reduction`。不修改原网络。 |
 | `Reduction.dtn` | 全局端口 DtN 矩阵，行列顺序同 `ports`。 |
 | `Reduction.components` | 逐组件 `ComponentReduction`（含局部 DtN 与 `SchurRecord`）。 |
@@ -68,11 +86,47 @@ python demo.py                             # 固定输入演示（约 0.05 秒�
 | `Solution.port_power` / `dissipated_power` | 端口注入功率 / 支路耗散功率（精确相等）。 |
 | `Solution.undetermined_nodes` | 浮接组件节点（电势只能确定到组件常数）。 |
 | `SchurRecord` | 保留 `K_PP, K_PI, K_II, K_II^{-1}, backmap=-K_II^{-1}K_IP`。 |
+| `expected_hitting_times(network, targets, stay_weights=None)` | 求到吸收目标集合的期望首达步数。 |
+| `HittingTimeResult.expectations` | 每节点期望；目标为 0，可达节点为 `Fraction`，不可达节点为 `math.inf`。 |
+| `HittingTimeResult.transition_probabilities` | 普通边电导与停留权重归一化后的转移概率；目标吸收为自概率 1。 |
+| `HittingTimeResult.residuals` / `max_abs_residual` | Poisson 方程逐节点残差；不可达节点为 `None`，有限节点精确为 0。 |
+| `HittingTimeResult.unreachable_components` | 不含目标的连通分量，包括孤立节点。 |
 
 异常层级：`NetworkError`（基类，携带可定位的 `node`/`edge`）
 ⊢ `NodeError`、`ConductanceError`、`ResistanceError`
-⊢ `ZeroResistanceError`、`PortError`、`PotentialError`、
-`LimitError`、`SingularSystemError`。
+⊢ `ZeroResistanceError`、`StayWeightError`、`PortError`、
+  `PotentialError`、`LimitError`、`SingularSystemError`。
+
+## 随机游走与期望首达时间
+
+每条普通无向边的电导先按平行边相加。对非目标节点 `i`，令
+`w_i = s_i + Σ_j g_ij`，其中 `s_i >= 0` 是可选停留权重。于是
+`P(i,j)=g_ij/w_i`，`P(i,i)=s_i/w_i`；目标集合吸收，目标到自身概率为 1。
+停留权重只属于随机游走模型，不是零电阻支路：普通电阻边的 `u == v`
+仍由 `Network.add_conductor` / `add_resistor` 拒绝，且 `laplacian()` 不变。
+
+期望步数满足 Poisson / Dynkin 方程：
+
+```
+h(t) = 0                                  # t 属于目标集合
+h(i) = 1 + Σ_j P(i,j) h(j)               # 非目标 i
+```
+
+实现按连通组件求解。含目标组件消去目标边界后解非奇异线性系统；不含目标
+的组件永远无法到达吸收集合，`expectations` 中对应值为 `math.inf`，不会把
+这些节点拼进全局奇异矩阵后报 `SingularSystemError`。孤立非目标若没有普通
+转移权重且停留权重也为 0，会在 `zero_total_weight_nodes` 中诊断；它同时
+位于不可达分量，期望仍为无穷。目标集合强制吸收，不参与该零权重诊断。
+
+`stay_weights` 参数可传入只针对本次求解的 `{节点: int/Fraction}` 覆盖映射，
+不改网络；`Network.set_stay_weight` 可保存默认值。停留权重要求非负、精确
+有理；`float`、`bool`、负数、未知节点均报错。若某个可达非目标节点总权重
+为 0，则没有合法概率分布；正常无向连通分量中不会出现这种情况。
+
+测试中用独立有限步概率递推计算尾和 `Σ_{t=0}^H P(T>t)`，它是 `E[T]` 的
+单调下界，并随 `H` 增加逼近精确期望；另在无自环单目标加权图上验证
+`H(a,b)+H(b,a)=2M R_eff(a,b)`，其中 `M=Σ_e g_e`。这里有效电阻来自旧 Schur
+端口接口，只用于恒等式检查，不直接把电阻值解释为时间。
 
 ## 数学背景
 
@@ -97,6 +151,8 @@ I_P = (K_PP - K_PI K_II^{-1} K_IP) V_P = S V_P
   需要小数量级请写 `Fraction(17, 10)`。
 - 端口电势额外接受**有限** `float`，按 `Fraction(x)` 精确转换；
   `NaN`/`±Infinity` 抛 `PotentialError`。
+- 随机游走停留权重与电导一样只接受 `int` / `Fraction`；负数抛
+  `StayWeightError`，普通电阻自环仍抛 `ConductanceError`。
 - 任何位置的 `bool`（`True/False`，虽为 `int` 子类）都被拒绝。
 - 边引用未注册节点 → `NodeError`（异常带节点名）；自环、非正电导、
   重复节点标签、空/重复/未知端口、电势数量或键不符均报错，
@@ -139,6 +195,8 @@ I_P = (K_PP - K_PI K_II^{-1} K_IP) V_P = S V_P
   不伪造连接关系。
 - 平行边电导直接相加（基尔霍夫并联）；无向处理，支路方向仅决定
   `branch_currents` 的符号约定（自 `u` 流向 `v` 为正）。
+- 随机游走复用普通节点与聚合后的边电导；每节点停留权重是可选自环概率源，
+  不修改旧电阻网络的拉普拉斯或端口消元结果。
 
 ## 已知限制 / 非目标
 
@@ -147,5 +205,7 @@ I_P = (K_PP - K_PI K_II^{-1} K_IP) V_P = S V_P
   标准兼容。
 - 零电阻（理想短路线）被明确拒绝：需要时请在网络定义中先合并等势节点。
 - 稠密矩阵 + 精确分数，不针对超大图/稀疏高性能场景。
+- 随机游走只实现离散时间、无向正电导加权链；无有向边、连续时间过程、
+  时变转移核或随机最短路径模型。不可达期望明确返回 `math.inf`。
 - 不提供网站、CLI 产品、报表或文件管理功能；仓库终端命令仅用于
   测试与演示。

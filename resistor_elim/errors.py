@@ -26,6 +26,10 @@ class ConductanceError(NetworkError):
     """电导值非法（非正、NaN/Infinity、类型不符）。"""
 
 
+class StayWeightError(NetworkError):
+    """随机游走停留权重非法（负数、NaN/Infinity、类型不符）。"""
+
+
 class ResistanceError(NetworkError):
     """电阻值非法（非正、NaN/Infinity、类型不符）。"""
 

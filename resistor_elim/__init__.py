@@ -8,6 +8,7 @@ from .errors import (
     NetworkError,
     NodeError,
     ConductanceError,
+    StayWeightError,
     ResistanceError,
     ZeroResistanceError,
     PortError,
@@ -23,6 +24,7 @@ from .reduction import (
     SchurRecord,
     Solution,
 )
+from .random_walk import HittingTimeResult, expected_hitting_times
 
 __all__ = [
     "Network",
@@ -31,9 +33,12 @@ __all__ = [
     "ComponentReduction",
     "SchurRecord",
     "Solution",
+    "HittingTimeResult",
+    "expected_hitting_times",
     "NetworkError",
     "NodeError",
     "ConductanceError",
+    "StayWeightError",
     "ResistanceError",
     "ZeroResistanceError",
     "PortError",

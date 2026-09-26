@@ -20,6 +20,7 @@ from .errors import (
     LimitError,
     NodeError,
     ResistanceError,
+    StayWeightError,
     ZeroResistanceError,
 )
 
@@ -111,6 +112,8 @@ class Network:
         self._adj: dict[Hashable, dict[Hashable, Fraction]] = {v: {} for v in labels}
         # 每条添加记录：(u, v, conductance)，便于逐支路核对
         self._branches: list[tuple[Hashable, Hashable, Fraction]] = []
+        # 随机游走可选的每节点停留权重；不是电阻支路，也不进入拉普拉斯。
+        self._stay_weights: dict[Hashable, Fraction] = {v: Fraction(0) for v in labels}
 
     # ------------------------------------------------------------------ #
     @property
@@ -120,6 +123,11 @@ class Network:
     @property
     def branches(self) -> tuple[tuple[Hashable, Hashable, Fraction], ...]:
         return tuple(self._branches)
+
+    @property
+    def stay_weights(self) -> tuple[Fraction, ...]:
+        """按 :pyattr:`nodes` 顺序返回每节点的随机游走停留权重。"""
+        return tuple(self._stay_weights[v] for v in self._nodes)
 
     def __len__(self) -> int:
         return len(self._nodes)
@@ -163,6 +171,27 @@ class Network:
         if r < 0:
             raise ResistanceError(f"电阻必须严格为正，收到 {r}", edge=(u, v))
         self.add_conductor(u, v, Fraction(1) / r)
+
+    def set_stay_weight(self, node: Hashable, weight: Any) -> None:
+        """设置随机游走在 ``node`` 上的非负停留（自环）权重。
+
+        停留权重只用于归一化转移概率，不是电阻支路，因此不会改变
+        :meth:`laplacian` 的电阻语义，也不放宽普通电阻边拒绝自环的规则。
+        权重使用精确的 ``int`` 或 ``Fraction``；本方法直接设置为给定值，
+        因此也可显式改回 0。
+        """
+        self.index(node)
+        value = exact_scalar(
+            weight,
+            f"节点 {node!r} 的停留权重",
+            StayWeightError,
+        )
+        if value < 0:
+            raise StayWeightError(
+                f"停留权重必须非负，收到 {value}",
+                node=node,
+            )
+        self._stay_weights[node] = value
 
     # ------------------------------------------------------------------ #
     def laplacian(self) -> list[list[Fraction]]:

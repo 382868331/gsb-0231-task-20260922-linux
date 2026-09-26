@@ -150,3 +150,42 @@ def parallel_dtn(conductances: Sequence[Fraction]) -> list[list[Fraction]]:
     """若干电导并联在两个端口之间的二端口 DtN。"""
     g = sum(Fraction(x) for x in conductances)
     return [[g, -g], [-g, g]]
+
+
+def hitting_time_lower_bounds(
+    nodes: Sequence[Hashable],
+    branches,
+    target: Hashable,
+    horizons: Sequence[int],
+    start: Hashable | None = None,
+    stays: dict[Hashable, Fraction] | None = None,
+) -> dict[int, Fraction]:
+    """独立有限步递推：返回 sum_{t=0}^H P(T>t)，它是 E[T] 的尾和下界。
+
+    这里自行由支路电导和停留权重归一化转移概率，不调用被测随机游走模块。
+    """
+    stays = stays or {}
+    adj = {v: {} for v in nodes}
+    for u, v, g in branches:
+        g = Fraction(g)
+        adj[u][v] = adj[u].get(v, Fraction(0)) + g
+        adj[v][u] = adj[v].get(u, Fraction(0)) + g
+
+    active = [v for v in nodes if v != target]
+    q = {v: Fraction(1) for v in active}
+    wanted = start if start is not None else nodes[0]
+    result = {}
+    cumulative = Fraction(0)
+    for horizon in range(max(horizons) + 1):
+        cumulative += q[wanted]
+        if horizon in horizons:
+            result[horizon] = cumulative
+        nxt = {}
+        for v in active:
+            total = sum(adj[v].values(), Fraction(0)) + Fraction(stays.get(v, 0))
+            nxt[v] = (
+                Fraction(stays.get(v, 0)) / total * q[v]
+                + sum(g / total * q[y] for y, g in adj[v].items() if y != target)
+            )
+        q = nxt
+    return result
