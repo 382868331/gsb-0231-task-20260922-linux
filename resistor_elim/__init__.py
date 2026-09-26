@@ -15,6 +15,8 @@ from .errors import (
     LimitError,
     SingularSystemError,
 )
+from .errors import StayWeightError, TargetError
+from .hitting import INFINITY, HittingTimeResult, hitting_times
 from .network import Network
 from .reduction import (
     schur_eliminate,
@@ -40,6 +42,11 @@ __all__ = [
     "PotentialError",
     "LimitError",
     "SingularSystemError",
+    "StayWeightError",
+    "TargetError",
+    "hitting_times",
+    "HittingTimeResult",
+    "INFINITY",
 ]
 
 __version__ = "1.0.0"

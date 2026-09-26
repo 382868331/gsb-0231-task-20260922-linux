@@ -20,6 +20,7 @@ from .errors import (
     LimitError,
     NodeError,
     ResistanceError,
+    StayWeightError,
     ZeroResistanceError,
 )
 
@@ -111,6 +112,10 @@ class Network:
         self._adj: dict[Hashable, dict[Hashable, Fraction]] = {v: {} for v in labels}
         # 每条添加记录：(u, v, conductance)，便于逐支路核对
         self._branches: list[tuple[Hashable, Hashable, Fraction]] = []
+        # 每节点非负停留权重（随机游走自环概率的权重；默认 0）。
+        # 这只是权重标注，不作为电导支路进入拉普拉斯，也不改变
+        # “Network 拒绝自环电阻支路”的规则。
+        self._stay: dict[Hashable, Fraction] = {v: Fraction(0) for v in labels}
 
     # ------------------------------------------------------------------ #
     @property
@@ -188,6 +193,29 @@ class Network:
     def neighbors(self, u: Hashable) -> dict[Hashable, Fraction]:
         self.index(u)
         return dict(self._adj[u])
+
+    # ------------------------------------------------------------------ #
+    def set_stay_weight(self, u: Hashable, weight: Any) -> None:
+        """设置节点 u 的非负停留权重（随机游走自环；默认 0）。
+
+        权重 w 与节点上全部电导之和 G 共同给出停留概率 w / (w + G)。
+        它不是电导支路：不进入 laplacian()，也不影响 schur_eliminate
+        的消元结果；自环电阻支路仍然被 add_conductor 拒绝。
+        """
+        self.index(u)
+        w = exact_scalar(weight, f"节点 {u!r} 的停留权重", StayWeightError)
+        if w < 0:
+            raise StayWeightError(f"停留权重必须非负，收到 {w}", node=u)
+        self._stay[u] = w
+
+    def stay_weight(self, u: Hashable) -> Fraction:
+        """节点 u 的停留权重（未设置时为 0）。"""
+        self.index(u)
+        return self._stay[u]
+
+    def stay_weights(self) -> dict[Hashable, Fraction]:
+        """全部节点的停留权重副本（按节点顺序）。"""
+        return dict(self._stay)
 
     def components(self) -> list[tuple[Hashable, ...]]:
         """返回无向连通组件（按各自最小节点次序排序的标签元组列表）。

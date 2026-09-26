@@ -38,6 +38,14 @@ class PortError(NetworkError):
     """端口集合非法（空集、未知节点、重复等）。"""
 
 
+class TargetError(PortError):
+    """随机游走目标集合非法（空集、未知节点、重复等）。"""
+
+
+class StayWeightError(NetworkError):
+    """节点停留权重非法（负数、NaN/Infinity、类型不符）。"""
+
+
 class PotentialError(NetworkError):
     """给定的端口电势非法（长度/键不符、NaN/Infinity 等）。"""
 

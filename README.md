@@ -40,7 +40,63 @@ sol.dissipated_power     # 8 —— Σ g(ΔV)²，精确相等
 ```bash
 python -m unittest discover -s tests -v   # 必要测试（unittest 自动统计用例数）
 python demo.py                             # 固定输入演示（约 0.05 秒）
+python demo_iteration.py                   # 随机游走期望首达步数演示（约 0.1 秒）
 ```
+
+## venv 准备
+
+仓库根目录的 `.venv` 是指向运行环境虚拟环境的符号链接；如需自建：
+
+```bash
+python3.14 -m venv .venv && source .venv/bin/activate
+```
+
+无需 `pip install` 任何内容（仅标准库，无第三方依赖）。
+
+## 随机游走：期望首次到达步数（本轮新增）
+
+把正电导归一成每个节点的转移概率，求到指定**吸收目标集合**的期望
+首次到达步数。建立并精确求解 Poisson 方程 `(I - P) h = 1`，**不是**
+把有效电阻直接当作时间。
+
+```python
+from fractions import Fraction
+from resistor_elim import Network, hitting_times
+
+net = Network(["s", "m", "t"])
+net.add_conductor("s", "m", 1)
+net.add_conductor("m", "t", 1)
+net.add_conductor("m", "t", 1)        # 平行边电导相加 -> p(m->t)=2/3
+net.set_stay_weight("s", 2)           # 停留权重 -> 自环概率 p(s->s)=2/3
+
+res = hitting_times(net, targets=["t"])
+res.expectations["s"]     # 6（精确 Fraction）
+res.residuals["s"]        # 0 —— Poisson 方程逐节点残差
+res.unreachable           # () —— 与目标不连通的节点清单
+```
+
+- **转移概率**：`p(u->v) = g_uv / (stay_u + Σ_w g_uw)`，
+  `p(u->u) = stay_u / (stay_u + Σ_w g_uw)`；平行边先按电导相加。
+- **停留权重（自环）**：`Network.set_stay_weight(u, w)` 设置每节点
+  **非负**权重（`int`/`Fraction`，默认 0；`stay_weight(u)` /
+  `stay_weights()` 读取）。它只是随机游走的权重标注：不进入
+  `laplacian()`、不改变 `schur_eliminate` 结果；自环**电阻支路**
+  仍然被 `add_conductor` 拒绝（旧规则不变）。
+- **目标集合吸收**：目标节点期望为 0；空/重复/未知目标抛
+  `TargetError`（`PortError` 子类）。
+- **不连通分量**：与目标不连通的节点期望为 `math.inf`
+  （`resistor_elim.INFINITY`），残差为 `None`，并在
+  `unreachable` / `target_components` 中给出连通性诊断——这**不是**
+  线性求解失败，不抛 `SingularSystemError`。
+- **结果结构** `HittingTimeResult`：`expectations`（每起点期望，
+  精确 `Fraction` 或 `math.inf`）、`residuals`（方程残差，精确 0；
+  目标/不可达节点为 `None`）、`reachable_transient`、`unreachable`、
+  `target_components`，以及 `expectation(node)` / `is_reachable(node)`。
+- **验证口径**：路径图/星形图手算分数值；独立有限步概率递推
+  （`E[min(T,k)] = Σ P(T>j)` 尾和）给出单调递增下界并逼近期望；
+  单目标无自环时验证通勤时间 `= 2 * 总电导 * 有效电阻`，有效电阻
+  由旧的 `schur_eliminate` DtN 独立得到。旧端口消元接口与回归测试
+  全部保持原状。
 
 `demo.py` 真实计算并打印：一个含内部节点、浮接组件与孤立节点的网络的
 消元结果（DtN、对称性/行和检查、内部电势/电流/功率恢复），与 demo 内
@@ -72,7 +128,8 @@ python demo.py                             # 固定输入演示（约 0.05 秒�
 异常层级：`NetworkError`（基类，携带可定位的 `node`/`edge`）
 ⊢ `NodeError`、`ConductanceError`、`ResistanceError`
 ⊢ `ZeroResistanceError`、`PortError`、`PotentialError`、
-`LimitError`、`SingularSystemError`。
+`LimitError`、`SingularSystemError`、`StayWeightError`；
+`TargetError` 是 `PortError` 的子类。
 
 ## 数学背景
 
